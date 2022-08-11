@@ -1,0 +1,507 @@
+---
+title: "Rockfall - Previsão de Alcance de Blocos"
+subtitle: 'Data Analysis Step'
+author: "Felipe Daiha Alves"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output: 
+  html_document: 
+    fig_width: 12
+    fig_height: 6
+    highlight: monochrome
+    number_sections: true
+---
+
+
+***
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# . **Objetivo**:
+
+
+Relatório da etapa de *data analysis* contendo informações e resultados sobre o processo de **Queda de Blocos** em encostas.  
+
+A fonte de dados original foi construída em um **Banco de Dados MySQL** e salvo um *csv* com os dados fundamentais para análise. Para acesso ao dicionário das variáveis, entre em <https://github.com/daiha98/rockfall/blob/main/README.md>.
+
+
+***
+
+
+# . **Environment & Data Cleaning**:
+
+## . **Configurando Ambiente**
+
+```{r env, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Nome dos pacotes
+
+packages <- c('dplyr', 'tidyr', 'data.table', ## Manipulacao de Dados
+              'ggplot2', 'gridExtra', 'scales', 'ggcorrplot' ## Visualizacao de Dados
+              )
+
+
+# Instalando pacotes (caso ainda nao esteja)
+
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+
+# Carregando pacotes
+
+invisible(lapply(packages, library, character.only = TRUE))
+
+
+# Removendo variavel criada previamente
+
+rm(packages, installed_packages)
+
+
+# Configuracoes de visualizacao 
+
+options(digits = 10, scipen = 999)
+
+```
+
+## . **Carregando dados**
+
+```{r loadData, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Load da base de dados
+
+df_rcf <- data.table::fread('C:/Users/daiha/OneDrive/Desktop/UFRJ/IC_Emilio/df_rcf_backup.csv', drop = 'V1') 
+
+
+# Visualizacao primaria dos dados
+
+glimpse(df_rcf)
+
+```
+
+## . **Tratamento de dados**
+
+
+Como os dados foram construídos no MySQL, essa etapa apenas serve para validação da consistência final do dataset.
+\
+\
+     <p style="text-align: center;">**Analisando NAs**</p>
+```{r checkNAs, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Checando NAs na base
+
+sapply(df_rcf, function(x) sum(is.na(x)))
+
+```
+\
+\
+*Comments*: 2 colunas estao completamente vazias, entao droparemos da base final.
+Alem disso, ha colunas cujo tipo do dado esta equivocado, por isso iremos alterar.
+\
+\
+     <p style="text-align: center;">**Alterando tipo e dropando variaveis NA**</p>
+```{r changeType, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Alterando tipos das variaveis e limpando df de features indesejadas
+
+df_rcf <- df_rcf %>%
+  dplyr::mutate(h_enc = as.integer(h_enc),
+                rock_mass = as.integer(rock_mass)) %>% ### Alterando classes 'num' para 'int' quando necessarias
+  dplyr::select(!c(h_rmp, ang_rmp)) ### Removendo colunas totalmente NA
+
+```
+\
+     <p style="text-align: center;">**Verificando classes das variaveis**</p>
+```{r checkClasses, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Verificando classes das variaveis
+
+lapply(df_rcf %>% 
+         dplyr::select(where(is.integer)) %>% 
+         dplyr::select(!c(id)), 
+       table) 
+
+```
+\
+\
+*Comments*: Variavel rock_mass tem 3 registros que foram inseridos de forma indevida... tratar 2370000 == 2307000, pois é como deveria vir na base de dados original.
+\
+\
+```{r changeValues, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Tratando classe rock_mass com dados inseridos indevidamente
+
+df_rcf <- df_rcf %>%
+  dplyr::mutate(rock_mass = as.integer(ifelse(rock_mass == 2370000, 2307000, rock_mass))) 
+      ### Se registro for o erro, tratar. Caso contrario, mantenha o dado original
+
+```
+
+
+***
+
+
+# . **Análise Exploratória**:
+
+## . **Distribuição da Área Crítica**
+
+```{r dist_AC, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Plot do grafico de densidade para analise das distribuicoes de AC
+
+ggplot2::ggplot(df_rcf, aes(x = porc_ac)) + 
+  ggplot2::geom_density(aes(y = ..scaled..), colour = 'black', fill = 'grey', size = 1.25) + 
+  ggplot2::scale_x_continuous(labels = scales::percent, breaks = seq(from = 0, to = 1, by = 0.1)) +
+  ggplot2::xlab('Blocos na Area Critica (%)') +
+  ggplot2::ylab('Estimativa de Densidade por Kernel') +
+  ggplot2::labs(title = "Grafico de Densidade",
+                subtitle = "\nAnalise da Porcentagem de Blocos na Area Critica\n") +
+  ggplot2::theme(panel.background = element_rect(fill = "white"), 
+                 panel.grid.major.x = element_line(colour = "grey"),
+                 plot.title = element_text(size = 18.0, face = "bold"),
+                 plot.subtitle = element_text(size = 15.0),
+                 panel.border = element_rect(colour = "black", fill = NA, size = 1),
+                 axis.text.x = element_text(angle = 0, size = 15.0),
+                 axis.text.y = element_text(size = 15.0),
+                 axis.title.x = element_text(size = 15.0),
+                 axis.title.y = element_text(size = 15.0))
+
+```
+\
+\
+*Comments*: Estimativa de Densidade por Kernel e uma forma não-paramétrica para estimar a Função densidade de probabilidade de uma variável aleatória, ou seja, é uma função que descreve a verossimilhanca de uma variavel aleatória tomar um valor dado. É uma forma melhor de visualizar a verdadeira densidade da populacao de variaveis continuas do que histogramas.
+\
+\
+O grafico nos mostra a tendência dos dados em convergir para as caudas. Isso nos diz que possivelmente o modelo da CPRM e sensível e volátil a variações dentro dos seus parâmetros, algo questionavel.
+\
+
+## . **Matrix de Correlação**
+
+```{r corrMatrix, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Criando uma matrix de Correlacao de pearson e plotando a matrix e ajustes no grafico
+
+ggcorrplot::ggcorrplot(corr = as.data.frame(stats::cor(df_rcf %>% 
+                                                         dplyr::select(!c(id)) %>%
+                                                         dplyr::select(Altura = h_enc, Angulo = ang_enc, 
+                                                                       Massa = rock_mass,
+                                                                       Velocidade_Rotacao = vel_rad, 
+                                                                       AlcanceMedio = mean_range,
+                                                                       Porc_AreaCritica = porc_ac, 
+                                                                       Porc_Dispersao = porc_disp,
+                                                                       Porc_BlocosMapeados = porc_rock_mapped) %>%
+                                                         tidyr:: drop_na()), method = "pearson", 
+                                            use = "complete.obs"),  
+                       lab_size = 5, 
+                       type = "upper", 
+                       hc.order = TRUE, 
+                       lab = TRUE,
+                       title = "Matriz de Correlação de Pearson entre Variáveis\n",
+                       legend.title = "\nGrau\n",
+                       digits = 1) +
+ ggplot2:: theme(legend.text = element_text(size = 15.0),
+                 axis.text.x = element_text(size = 13, angle = 90),
+                 axis.text.y = element_text(size = 13),
+                  plot.title = element_text(size = 18.0, face = "bold"),
+                 panel.border = element_rect(colour = "grey", fill = NA, size = 1))
+
+```
+\
+\
+*Comments*: Podemos visualizar que dentre as principais variáveis previamente ao processo de queda de blocos conhecidas (Exp.: Altura; Ângulo; Massa dos Blocos e Velocidade de Rotação Estimada).
+\ 
+
+A altura apresenta uma forte correlação positiva com o alcance médio, enquanto que o ângulo de inclinação da encosta mostra uma correlação negativa moderada com o mesmo. O restante das variáveis conhecidas no momento da simulação não apresentam correlação.
+\ 
+
+As demais variáveis são cálculos a partir do target. Portanto, não são discriminantes em um eventual processo de Machine Learning.
+\
+
+## . **Frequencia Faixa de Áreas Críticas x Variáveis Topográficas**
+
+```{r ac_versus_vars, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Promovendo uma classificacao para as Areas Criticas:
+
+df_rcf <- df_rcf %>%
+  dplyr::mutate(Faixa_BlocosAC = cut(porc_ac, 
+                                     breaks = c(0.000, 0.25, 0.500, 0.750, Inf),
+                                     labels = c("a.[0 a 25%)", 
+                                                "b.[25 a 50%)",
+                                                "c.[50 a 75%)",
+                                                "d.[75 a 100%]"),
+                                     right = FALSE))
+
+
+# Plotando visoes de Faixa de Area Critica x Variaveis Topograficas
+
+    ## 1 - Altura da Encosta
+    
+    ggFaixas_hEnc <- ggplot2::ggplot(df_rcf, aes(x = as.factor(h_enc), fill = as.factor(Faixa_BlocosAC))) + 
+      ggplot2::geom_bar(width = 0.5, colour = "black", aes(y=..count../tapply(..count.., ..x.. ,sum)[..x..], 
+                                                           fill = factor(Faixa_BlocosAC))) +
+      ggplot2::scale_y_continuous(labels = scales::percent, breaks = c(0, 1)) +
+      ggplot2::scale_fill_brewer(palette = "Reds") +
+      ggplot2::xlab('Altura da Encosta (m)') +
+      ggplot2::ylab('Porcentagem') +
+      ggplot2::labs(title = "Distribuição dos Dados\nAltura da Encosta",
+                    subtitle = "\nPorcentagem de Blocos na Área Crítica\n",
+                    fill = "\nFaixa de Porcentagens\n") +
+      ggplot2::geom_text(aes(label=scales::percent(..count../tapply(..count.., ..x.. ,sum)[..x..]), 
+                             y=..count../tapply(..count.., ..x.. ,sum)[..x..]), 
+                         stat = "count", 
+                         position = position_stack(vjust = .5),
+                         colour = "black", 
+                         size = 2.5,
+                         fontface = "bold") +
+      ggplot2::theme(panel.background = element_rect(fill = "white"), 
+                     plot.title = element_text(size = 18, face = "bold"),
+                     plot.subtitle = element_text(size = 15.0),
+                     panel.border = element_rect(colour = "black", fill = NA, size = 1))
+
+    ## 2 - Angulo da Encosta
+    
+    ggFaixas_angEnc <- ggplot2::ggplot(df_rcf, aes(x = as.factor(ang_enc), fill = as.factor(Faixa_BlocosAC))) + 
+      ggplot2::geom_bar(width = 0.5, colour = "black", aes(y=..count../tapply(..count.., ..x.. ,sum)[..x..], 
+                                                           fill = factor(Faixa_BlocosAC))) +
+      ggplot2::scale_y_continuous(labels = scales::percent, breaks = c(0, 1)) +
+      ggplot2::scale_fill_brewer(palette = "Blues") +
+      ggplot2::xlab('Ângulo da Encosta (º)') +
+      ggplot2::ylab('Porcentagem') +
+      ggplot2::labs(title = "Distribuição dos Dados\nÂngulo da Encosta", 
+                    subtitle = "\nPorcentagem de Blocos na Área Crítica\n", 
+                    fill = "\nFaixa de Porcentagens\n") +
+      ggplot2::geom_text(aes(label=scales::percent(..count../tapply(..count.., ..x.. ,sum)[..x..]), 
+                             y=..count../tapply(..count.., ..x.. ,sum)[..x..]), 
+                         stat = "count", 
+                         position = position_stack(vjust = .5), 
+                         colour = "black", 
+                         size = 2.5, 
+                         fontface = "bold") +
+      ggplot2::theme(panel.background = element_rect(fill = "white"), 
+                     plot.title = element_text(size = 18, face = "bold"),
+                     plot.subtitle = element_text(size = 15.0),
+                     panel.border = element_rect(colour = "black", fill = NA, size = 1))
+
+    ## Armazenandp todos os graficos unidos
+    
+    plotGrid <- gridExtra::grid.arrange(ggFaixas_hEnc, ggFaixas_angEnc, 
+                                        ncol = 2, nrow = 1)
+
+```
+\
+\
+*Comments*: Esse Gráfico mostra a porcentagem de blocos que caem na area crítica em relação aos parâmetros topográficos. Podemos concluir que a altura de fato eh uma variável relevante para determinacao da área crítica de encostas, enquanto que o ângulo tem fraca correlação negativa até 70º, que confere o Modelo 1 da CPRM.
+\
+\
+Com o modelo 2 (pos 70º), nao ha correlação visível entre ângulo da encosta e area crítica. Dessa forma, precisamos estudar a influência das variáveis no target, que é o Alcance Medio dos blocos. Assim, será possivel concluir (ou ate sugerir) necessidade de mudancas nas normas de definição de áreas de risco em encostas.
+\
+
+## . **Boxplot Variáveis x Alcance Médio**
+
+```{r bxp_varsAlcance, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Boxplot relacionando Alcance com variaveis
+
+    ## 1 - Alturas
+    
+    bxp_h <- ggplot(data = df_rcf, aes(x = as.factor(h_enc), y = mean_range)) +
+      ggplot2::geom_boxplot(colour = 'black', fill = 'red') +
+      ggplot2::xlab('Altura da Encosta (m)') +
+      ggplot2::ylab('Alcance Médio (m)') +
+      ggplot2::labs(title = "Altura da Encosta\n") +
+      ggplot2::theme(panel.background = element_rect(fill = "white"),
+                     panel.grid.major.y =  element_line(colour = "lightgrey"),
+                     #panel.grid.major.x =  element_line(colour = "lightgrey"),
+                     plot.title = element_text(size = 18.0, face = "bold"),
+                     panel.border = element_rect(colour = "black", fill = NA, size = 1),
+                     axis.text.x = element_text(angle = 0, size = 15.0),
+                     axis.text.y = element_text(size = 15.0),
+                     axis.title.x = element_text(size = 15.0),
+                     axis.title.y = element_text(size = 15.0)) 
+    
+    ## 2 - Angulos
+    
+    bxp_ang <- ggplot(data = df_rcf, aes(x = as.factor(ang_enc), y = mean_range)) +
+      ggplot2::geom_boxplot(colour = 'black', fill = 'blue') +
+      ggplot2::xlab('Ângulo da Encosta (º)') +
+      ggplot2::ylab('Alcance Médio (m)') +
+      ggplot2::labs(title = "Ângulo da Encosta\n") +
+      ggplot2::theme(panel.background = element_rect(fill = "white"),
+                     panel.grid.major.y =  element_line(colour = "lightgrey"),
+                     #panel.grid.major.x =  element_line(colour = "lightgrey"),
+                     plot.title = element_text(size = 18, face = "bold"),
+                     panel.border = element_rect(colour = "black", fill = NA, size = 1),
+                     axis.text.x = element_text(angle = 0, size = 15.0),
+                     axis.text.y = element_text(size = 15.0),
+                     axis.title.x = element_text(size = 15.0),
+                     axis.title.y = element_text(size = 15.0))
+    
+    ## 3 - Massa dos Blocos
+    
+    bxp_mass <- ggplot(data = df_rcf, aes(x = as.factor(rock_mass/1000.00), y = mean_range)) +
+      ggplot2::geom_boxplot(colour = 'black', fill = 'brown') +
+      ggplot2::xlab('Massa dos blocos (ton)') +
+      ggplot2::ylab('Alcance Médio (m)') +
+      ggplot2::labs(title = "Massa dos Blocos\n") +
+      ggplot2::theme(panel.background = element_rect(fill = "white"),
+                     panel.grid.major.y =  element_line(colour = "lightgrey"),
+                     #panel.grid.major.x =  element_line(colour = "lightgrey"),
+                     plot.title = element_text(size = 18, face = "bold"),
+                     panel.border = element_rect(colour = "black", fill = NA, size = 1),
+                     axis.text.x = element_text(angle = 0, size = 15.0),
+                     axis.text.y = element_text(size = 15.0),
+                     axis.title.x = element_text(size = 15.0),
+                     axis.title.y = element_text(size = 15.0))
+    
+    ## 4 - Velocidade Angular
+    
+    bxp_vel <- ggplot(data = df_rcf, aes(x = as.factor(vel_rad), y = mean_range)) +
+      ggplot2::geom_boxplot(colour = 'black', fill = 'orange') +
+      ggplot2::xlab('Velocidade Angular (rad/s)') +
+      ggplot2::ylab('Alcance Médio (m)') +
+      ggplot2::labs(title = "Velocidade Angular\n") +
+      ggplot2::theme(panel.background = element_rect(fill = "white"),
+                     panel.grid.major.y =  element_line(colour = "lightgrey"),
+                     #panel.grid.major.x =  element_line(colour = "lightgrey"),
+                     plot.title = element_text(size = 18, face = "bold"),
+                     panel.border = element_rect(colour = "black", fill = NA, size = 1),
+                     axis.text.x = element_text(angle = 0, size = 15.0),
+                     axis.text.y = element_text(size = 15.0),
+                     axis.title.x = element_text(size = 15.0),
+                     axis.title.y = element_text(size = 15.0))
+
+
+# Colocando todos os plots em um grid para visualizacao unica
+
+gridExtra::grid.arrange(bxp_h, bxp_ang, 
+                        bxp_mass, bxp_vel, 
+                        ncol = 2, nrow = 2)
+
+```
+\
+\
+*Comments*: Os graficos comprovam o corrplot, comparando mean_range pelas demais variaveis!
+\
+
+## . **Correlação Numérica - Alcance x Velocidade Angular**
+
+```{r corrNum_alncacneVelAng, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Correlacoes de Pearson Alcance/Velocidade Angular
+  
+  ## 1 - Alturas
+  
+  df_corr_hs <- df_rcf %>%
+    dplyr::group_by(h_enc) %>%
+    dplyr::summarise(corr_hs = stats::cor(mean_range, vel_rad)) 
+    ### A relação entre as variáveis vai diminuindo a medida que a altura aumenta
+  
+        ### Verificando a disposição em um Grafico de pontos e a possivel curva:
+          
+        gg_h <- ggplot2::ggplot(data = df_corr_hs, aes(x = corr_hs, y = h_enc)) + 
+          ggplot2::geom_path(linetype = 'dashed', colour = 'red', size = 1.25) + 
+          ggplot2::geom_point(colour = 'black', size = 3.0, shape = 19) +
+          ggplot2::labs(title = "Curva Estimada\nCorrelacao de Pearson\nAlcance Medio/Vel. Angular",
+                        subtitle = "\nCriterio por Altura\n") +
+          ggplot2::scale_x_continuous("Cor de Pearson", breaks = seq(0.0, 1.0, by = 0.2)) + 
+          ggplot2::scale_y_continuous("Altura da Encosta (m)", breaks = unique(df_corr_hs$h_enc)) + 
+          ggplot2::theme(panel.background = element_rect(fill = "white"),
+                         axis.text.x = element_text(angle = 0, size = 17.0),
+                         axis.text.y = element_text(size = 17.0),
+                         axis.title.x = element_text(size = 17.0),
+                         axis.title.y = element_text(size = 17.0),
+                         panel.grid.major.y =  element_line(colour = "lightgrey"),
+                         panel.grid.major.x =  element_line(colour = "lightgrey"),
+                         plot.title = element_text(size = 14, face = "bold"),
+                         panel.border = element_rect(colour = "black", fill = NA, size = 1))
+
+  ## 2 - Angulo da Encosta
+  
+  df_corr_ang <- df_rcf %>%
+    dplyr::group_by(ang_enc) %>%
+    dplyr::summarise(corr_ang = stats::cor(mean_range, vel_rad)) 
+        ### A relação entre as variáveis vai aumentando a medida que a altura aumenta
+  
+        ### Verificando a disposição em um Grafico de pontos e a possivel curva:
+        
+        gg_ang <- ggplot2::ggplot(data = df_corr_ang, aes(x = corr_ang, y = ang_enc)) + 
+          ggplot2::geom_path(linetype = 'dashed', colour = 'blue', size = 1.25) + 
+          ggplot2::geom_point(colour = 'black', size = 3.0, shape = 19) +
+          ggplot2::labs(title = "Curva Estimada\nCorrelacao de Pearson\nAlcance Medio/Vel. Angular",
+                        subtitle = "\nCriterio por Angulo\n") +
+          ggplot2::scale_x_continuous("Cor de Pearson", breaks = seq(0.0, 1.0, by = 0.2)) + 
+          ggplot2::scale_y_continuous("Angulo da Encosta (º)", breaks = unique(df_corr_ang$ang_enc)) + 
+          theme(panel.background = element_rect(fill = "white"),
+                axis.text.x = element_text(angle = 0, size = 17.0),
+                axis.text.y = element_text(size = 17.0),
+                axis.title.x = element_text(size = 17.0),
+                axis.title.y = element_text(size = 17.0),
+                panel.grid.major.y =  element_line(colour = "lightgrey"),
+                panel.grid.major.x =  element_line(colour = "lightgrey"),
+                plot.title = element_text(size = 14, face = "bold"),
+                panel.border = element_rect(colour = "black", fill = NA, size = 1))
+  
+  ## 3 - Massa do Bloco
+  
+  df_corr_mass <- df_rcf %>%
+    dplyr::group_by(rock_mass) %>%
+    dplyr::summarise(corr_mass = stats::cor(mean_range, vel_rad)) 
+      ### A relação entre as variáveis vai aumentando a medida que a 
+      ### massa do bloco aumenta, mas ainda permanece muito baixo!
+  
+        ### Verificando a disposição em um Grafico de pontos e a possivel curva:
+        
+        gg_mass <- ggplot2::ggplot(data = df_corr_mass, aes(x = corr_mass, y = rock_mass)) + 
+          ggplot2::geom_path(linetype = 'dashed', colour = 'brown', size = 1.25) + 
+          ggplot2::geom_point(colour = 'black', size = 3.0, shape = 19) +
+          ggplot2::labs(title = "Curva Estimada\nCorrelacao de Pearson\nAlcance Medio/Vel. Angular",
+                        subtitle = "\nCriterio por Massa do Bloco\n") +
+          ggplot2::scale_x_continuous("Cor de Pearson", breaks = seq(0.0, 1.0, by = 0.1)) + 
+          ggplot2::scale_y_continuous("Massa do Bloco (kg)", breaks = unique(df_corr_mass$rock_mass)) + 
+          theme(panel.background = element_rect(fill = "white"),
+                axis.text.x = element_text(angle = 0, size = 17.0),
+                axis.text.y = element_text(size = 8.0),
+                axis.title.x = element_text(size = 17.0),
+                axis.title.y = element_text(size = 17.0),
+                panel.grid.major.y =  element_line(colour = "lightgrey"),
+                panel.grid.major.x =  element_line(colour = "lightgrey"),
+                plot.title = element_text(size = 14, face = "bold"),
+                panel.border = element_rect(colour = "black", fill = NA, size = 1))
+        
+        
+# Plot de todos os graficos unidos
+        
+gridExtra::grid.arrange(gg_h, gg_ang, gg_mass, 
+                        ncol = 3, nrow = 1)
+
+```
+\
+\
+*Comments*: O gráfico mostra como subagrupando os dados, podemos ter visões diferentes quanto as correlações entre variáveis.
+\
+\
+A altura, que se mostra uma importante variável, perde/ganha forte influência na relação alcance medio vs velocidade angular (algo que isoladamente nao aparentava mostrar correlação). Isso mostra o impacto de determinados parametros para tentar prever uma variavel objetivo.
+\
+\
+O inverso vale para o ângulo, tendo 90º uma forte correlação entre as features ângulo e alcance. Já no caso da massa dos blocos, a influência permanece pequena, com leve crescimento em valores maiores de massa.
+\
+
+## . **Salvando base para modelo**
+
+```{r rmAll, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Salvando dado para estudo futuro
+
+data.table::fwrite(
+  x = df_rcf, 
+  file = 'C:/Users/daiha/OneDrive/Desktop/UFRJ/IC_Emilio/Resultados/ic_rocfall/TCC_files/df_rcf.gz', 
+  compress = 'gzip')
+
+# Limpando workspace
+
+rm(list = ls())
+
+```

@@ -1,0 +1,541 @@
+---
+title: "Rockfall - Previsão de Alcance de Blocos"
+subtitle: 'Machine Learning Step'
+author: "Felipe Daiha Alves"
+date: '`r format(Sys.Date(), "%Y-%m-%d")`'
+output: 
+  html_document: 
+    fig_width: 12
+    fig_height: 6
+    highlight: monochrome
+    number_sections: true
+---
+
+
+***
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# . **Objetivo**:
+
+
+Relatório da etapa de *machine learning* contendo fases de modelagem e avaliação de métricas sobre o processo de **Queda de Blocos** em encostas.  
+
+A fonte de dados original foi construída em um **Banco de Dados MySQL** com os dados previamente tratados e salvo um arquivo comprimido em *gz* com os dados para elaboração do modelo. Para acesso ao dicionário das variáveis, entre em <https://github.com/daiha98/rockfall/blob/main/README.md>.
+
+
+***
+
+
+# . **Environment & Data Cleaning**:
+
+## . **Configurando Ambiente**
+
+```{r env, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Nome dos pacotes
+
+packages <- c('openxlsx', 'dplyr', 'data.table', ## Manipulacao de Dados
+              'ggplot2', 'ggraph', 'igraph', ## Visualizacao de Dados
+               'caTools', 'caret', 'randomForest', 'glmnet',  ## Algoritmos e Ferramentas de ML
+               'mlr', 'DALEX', 'MLmetrics', 'mltools', 'miscTools' ## Avaliacao de resultados dos modelos
+              )
+
+
+# Instalando pacotes (caso ainda nao esteja)
+
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+
+# Carregando pacotes
+
+invisible(lapply(packages, library, character.only = TRUE))
+
+
+# Removendo variavel criada previamente
+
+rm(packages, installed_packages)
+
+
+# Configuracoes de visualizacao 
+
+options(digits = 10, scipen = 999)
+
+```
+
+## . **Carregando dados tratados**
+
+```{r loadData, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Load da base de dados
+
+rcfToModel <- data.table::fread(paste0('C:/Users/daiha/OneDrive/Desktop/UFRJ/IC_Emilio/Resultados/ic_rocfall/',
+                                   'TCC_files/df_rcf.gz'))
+
+
+# Visualizacao primaria dos dados
+
+glimpse(rcfToModel)
+
+```
+
+## . **Seleção de Variáveis**
+
+A partir da etapa de análise de dados do *rmd* neste mesmo repositório, podemos selecionar as variáveis mais relevantes para a construção de um modelo de machine learning.
+```{r selectVars, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Filtrando a base para apenas variaveis a serem modeladas, juntamente com o target 'mean_range'
+
+rcfToModel <- rcfToModel %>%
+  select(id, h_enc, ang_enc, rock_mass, vel_rad, mean_range)
+
+```
+
+## . **Machine Learning**
+
+
+Com isso, podemos começar as etapas necessárias para a elaboração de um modelo de regressão.
+\
+\
+     <p style="text-align: center;">**1 - Testando modelos e tunando hiperparâmetros**</p>
+\
+Para visualizarmos a priori desempenho de alguns desses algoritmos, vamos construir uma tabela capaz de nos dizer os resultados obtidos de algumas métricas através de um grid de hiperparâmetros. Dessa forma, aproveitamos para tunar os principais argumentos a serem utilizados no modelo.
+```{r modelGrid, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Modelos e Hiperparametros a serem otimizados para posterior analise
+
+    ## 1 - GLM
+    
+          ### Criando uma lista com os modelos a serem utilizados
+          
+          res = mlr::tuneParams(
+            learner = mlr::makeLearner("regr.glmnet", predict.type = "response"),
+            task = mlr::makeRegrTask(data = rcfToModel, target = "mean_range"),
+            resampling = mlr::makeResampleDesc(method = "RepCV", folds = 5, reps = 3),
+            control = mlr::makeTuneControlGrid(),
+            par.set = ParamHelpers::makeParamSet(makeDiscreteParam("lambda", values = seq(0.02, 2.0, 0.2)),
+                                                 makeDiscreteParam("alpha", values = seq(0.25, 1.25, 0.25))),
+            measures = list(mae, mape, medae),
+            show.info = FALSE)
+          
+          ### Visualizando resultados do tuning
+          
+          opt_glm = as.data.frame(res$opt.path) %>%
+            dplyr::mutate(model = 'glm') %>%
+            dplyr::select(model, exec.time, alpha, lambda,
+                          mae.test.mean, mape.test.mean, medae.test.mean)
+          
+          ### Dropando variaveis indesejadas
+          
+          rm(res)
+
+
+    ## 2 - Arvore de Decisao
+
+          ### Criando uma lista com os modelos a serem utilizados
+          
+          res = mlr::tuneParams(
+            learner = mlr::makeLearner("regr.rpart", predict.type = "response"),
+            task = mlr::makeRegrTask(data = rcfToModel, target = "mean_range"),
+            resampling = mlr::makeResampleDesc(method = "RepCV", folds = 5, reps = 3),
+            control = mlr::makeTuneControlGrid(),
+            par.set = ParamHelpers::makeParamSet(makeDiscreteParam("cp", values = seq(0.025, 0.1, 0.025)),
+                                                 makeDiscreteParam("minsplit", values = c(10, 20)),
+                                                 makeDiscreteParam("minbucket", values = c(round(5/3),                                                                                                          round(10/3),                                                                                                         round(20/3))),
+                                                 makeDiscreteParam("maxdepth", values = c(5, 10))),
+            measures = list(mae, mape, medae),
+            show.info = FALSE)
+          
+          ### Visualizando resultados do tuning
+          
+          opt_rPart = as.data.frame(res$opt.path) %>%
+            dplyr::mutate(model = 'rpart') %>%
+            dplyr::select(model, exec.time, cp, minsplit, minbucket, maxdepth,
+                          mae.test.mean, mape.test.mean, medae.test.mean)
+          
+          ### Dropando variaveis indesejadas
+          
+          rm(res)
+        
+    ## 3 - Random Forest
+        
+        ### Criando uma lista com os modelos a serem utilizados
+        
+        res = mlr::tuneParams(
+          learner = mlr::makeLearner("regr.randomForest", predict.type = "response"),
+          task = mlr::makeRegrTask(data = rcfToModel, target = "mean_range"),
+          resampling = mlr::makeResampleDesc(method = "RepCV", folds = 5, reps = 3),
+          control = mlr::makeTuneControlGrid(),
+          par.set = ParamHelpers::makeParamSet(makeDiscreteParam("ntree", values = c(20, 50, 100, 200)),
+                                               makeDiscreteParam("mtry", values = c(1, 2)),
+                                               makeDiscreteParam("nodesize", values = seq(5, 25, 5))),
+          measures = list(mae, mape, medae),
+          show.info = FALSE)
+        
+        ### Visualizando resultados do tuning
+        
+        opt_rF = as.data.frame(res$opt.path) %>%
+          dplyr::mutate(model = 'randomForest') %>%
+          dplyr::select(model, exec.time, ntree, mtry, nodesize, # maxnodes,
+                        mae.test.mean, mape.test.mean, medae.test.mean)
+        
+        ### Dropando variaveis indesejadas
+        
+        rm(res)
+    
+        
+# Juntando tudo em um mesmo df
+        
+gridModels <- data.table::rbindlist(list(opt_glm, opt_rPart, opt_rF), use.names = TRUE, fill = TRUE)  %>%
+  dplyr::select(model, exec.time, mae.test.mean, mape.test.mean, medae.test.mean,
+                alpha, lambda, cp, minsplit, minbucket, maxdepth, ntree, mtry, nodesize) #, maxnodes)
+  
+
+# Comparativo entre os modelos
+
+comparativeModels <- gridModels %>%
+  dplyr::select(model, exec.time, mae.test.mean, mape.test.mean, medae.test.mean) %>%
+  dplyr::group_by(model) %>%
+  dplyr::filter(medae.test.mean == min(medae.test.mean, na.rm = TRUE)) %>%
+  dplyr::distinct(model, .keep_all = TRUE) %>%
+  dplyr::arrange(medae.test.mean)
+
+
+# Printando resultado de modelos com o menor MEDAE (metrica escolhida para analise)
+
+print(comparativeModels)
+
+```
+\
+\
+*Comments*: Nosso modelo com o melhor MEDAE (*Median Absolute Error*) foi o RandomForest disparado. Escolheremos eles inicialmente para trabalharmos
+\
+\
+    <p style="text-align: center;">**2 - Split de Treino & Validação**</p>
+```{r splitTrainTest, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Criando a "semente geradora" e dividindo a Base de Dados em Treino-Teste:
+        
+set.seed(1234)
+        
+# Divide a base de dados aleatoriamente segundo a variavel 'X' em fracoes TRUE (70%) e FALSE (30%).
+        
+split_db = caTools::sample.split(rcfToModel$mean_range, SplitRatio = 0.70) 
+        
+    ## Define que os valores TRUE pertencem ao DB treino
+        
+    train_db = base::subset(rcfToModel, split_db == TRUE)
+        
+    ## Define que os valores FALSE pertencem ao DB teste
+        
+    validacao_db = base::subset(rcfToModel, split_db == FALSE)
+        
+    ## Dropando variaveis indesejadas
+      
+    rm(split_db)
+
+```
+\
+Para validarmos se nosso processo de treino e teste dividiu a base em distribuições parecidas, iremos utilizar um gráfico de ECDF juntamente com o valor de KS para garantirmos que igualdade em nossos conjuntos de dados. Nossa meta é atingir um KS menor que 5%.
+```{r ecdfKS, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Verificando se Treino-Teste esta balanceado ao db original (KS < 5%)
+        
+    ## Armazenando os valores de ks
+        
+    ks = stats::ks.test(x = train_db$mean_range, 
+                        y = validacao_db$mean_range,
+                        alternative = "two.sided")
+        
+        
+    ## Gerando o grafico de ecdf com os valores de ks
+            
+    ggplot2::ggplot() +
+      ggplot2::stat_ecdf(data = train_db, aes(x = mean_range), colour = "blue", size = 1.25) +
+      ggplot2::stat_ecdf(data = validacao_db, aes(x = mean_range), colour = "red", size = 1.25) +
+      ggplot2::scale_colour_discrete(labels = c("Treino", "Validação")) +
+      ggplot2::labs(title = 'Função de Distribuição Acumulada Empírica',
+                    subtitle = '\nRelação entre Bases de Treino e Validação\n',
+                    x = 'Alcance Médio (m)',
+                    y = 'Densidade Acumulada') +
+      ggplot2::annotate(geom = 'text', label = paste0("KS = ", round(ks[[1]], 4)*100, '%'), 
+                        x = Inf, y = Inf, hjust = 3.75, vjust = 10.0, size = 8.0, fontface = 2) +
+      ggplot2::annotate(geom = 'text', label = "Treino (Azul)", 
+                        x = Inf, y = Inf, hjust = 3.5, vjust = 15.0, size = 8.0, fontface = 3) +
+      ggplot2::annotate(geom = 'text', label = "Validação (Vermelho)", 
+                        x = Inf, y = Inf, hjust = 2.25, vjust = 17.0, size = 8.0, fontface = 3) +
+      ggplot2::theme(panel.background = element_rect(fill = "white"),
+                     axis.line = element_line(colour = "grey50"),
+                     legend.box.background = element_rect(),
+                     legend.box.margin = ggplot2::margin(6, 6, 6, 6),
+                     plot.title = element_text(size = 18.0, face = "bold"),
+                     plot.subtitle = element_text(size = 15.0),
+                     panel.border = element_rect(colour = "black", fill = NA, size = 1),
+                     axis.text.x = element_text(angle = 0, size = 17.5),
+                     axis.text.y = element_text(size = 17.5),
+                     axis.title.x = element_text(size = 17.5),
+                     axis.title.y = element_text(size = 17.5))
+
+```
+\
+\
+*Comments*: As bases apresentam curvas de distribuições acumuladas muito próximas... O db está balanceado!
+\
+\
+    <p style="text-align: center;">**3 - Treinando o algoritmo**</p>
+\
+Com nossos dados de treino e teste consistentes, podemos passar para a etapa de treinar nosso modelo de RandomForest. Utilizaremos os hiperparâmetros obtidos na etapa 2.4.1 e aplicaremos a técnica de Cross-Validation, onde os dados de treino serao divididos em 'k' camadas, onde 'k - 1' será utilizado como teste para maior generalização do modelo.
+```{r trainModel, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Puxando modelo com melhor mediana de erro absoluto
+
+fit <- gridModels %>%
+  dplyr::group_by(model) %>%
+  dplyr::filter(medae.test.mean == min(medae.test.mean, na.rm = TRUE)) %>%
+  dplyr::distinct(model, .keep_all = TRUE) %>%
+  dplyr::arrange(medae.test.mean) %>%
+  dplyr::ungroup() %>%
+  dplyr::slice(1) %>% ## Pegando melhor modelo obtido pelo MEDAE
+  dplyr::mutate(dplyr::across(dplyr::everything(), ~as.character(.x))) %>%
+  dplyr::select(model, ntree, mtry, nodesize)
+
+
+# Transformando para formato de lista para acesso posterior
+  
+fit <- as.list(fit)
+
+
+# Construindo modelo de regressao
+
+regRF_model = caret::train(mean_range ~ .,
+                           data = train_db %>% dplyr::select(!c(id)),
+                           trControl = caret::trainControl(method = 'repeatedcv', number = 5, repeats = 3),
+                           metric = "RMSE", maximize = TRUE,
+                           tuneGrid = expand.grid(.mtry = as.integer(fit[["mtry"]])), 
+                           ntree = as.integer(fit[["ntree"]]), nodesize = as.integer(fit[["nodesize"]]),
+                           method = "rf")
+
+# Printando output do modelo
+
+print(regRF_model)
+
+```
+\
+\
+    <p style="text-align: center;">**4 - Fazendo predictions nas bases de treino e validação**</p>
+```{r predictions, echo=TRUE, message=FALSE, warning=FALSE}
+
+# Testando o modelo em treino e teste
+
+    ## 1 - Treino
+
+    eval_train <- train_db %>% 
+         dplyr::bind_cols(stats::predict(object = regRF_model, 
+                                         newdata = train_db %>% 
+                                           dplyr::select(!c(id, mean_range)))) %>%
+          dplyr::rename(pred_train = "...7") %>%
+          dplyr::mutate(dataset = 'train')
+
+    # 2 - Teste
+
+    eval_valid <- validacao_db %>% 
+      dplyr::bind_cols(stats::predict(object = regRF_model, 
+                                      newdata = validacao_db %>% 
+                                        dplyr::select(!c(id, mean_range)))) %>%
+      dplyr::rename(pred_valid = "...7") %>%
+      dplyr::mutate(dataset = 'valid')
+
+
+# Juntando tudo em um mesmo df para avaliacao do modelo
+    
+evalRF_df <- data.table::rbindlist(list(eval_train, eval_valid), 
+                                   use.names = TRUE, fill = TRUE) %>%
+  dplyr::arrange(id)
+
+
+# Printando um subset com exemplos
+
+print(evalRF_df %>%
+        dplyr::group_by(dataset) %>% 
+        dplyr::sample_n(size = 5) %>%
+        dplyr::ungroup())
+
+```
+
+## . **Avaliação de Resultados**
+
+
+Por fim, podemos promover algumas análises para avaliar a qualidade do nosso modelo.
+\
+\
+    <p style="text-align: center;">**1 - Feature Importance**</p>
+```{r varImp, echo=TRUE, message=FALSE, warning=FALSE}
+
+### 1 - Feature Importance
+
+                  #### Construindo dataframe 
+
+                  varImp <- as.data.frame(t(caret::varImp(regRF_model)[["importance"]])) %>%
+                      dplyr::select(Altura = h_enc, Angulo = ang_enc, 
+                                    Massa_Bloco = rock_mass, Vel_Angular = vel_rad) %>%
+                      tidyr::pivot_longer(cols = 1:4, names_to = 'Parametros', values_to = 'Importancia') %>%
+                      dplyr::mutate(Importancia = round(Importancia, digits = 2)) %>%
+                      dplyr::arrange(desc(Importancia))
+
+                  #### Elaborando plot para analise
+
+                  ggplot2::ggplot(data = varImp, aes(x = reorder(Parametros, Importancia), y = Importancia)) +
+                    ggplot2::geom_col(fill = '#FF3E89', colour = '#25276F') +
+                    ggplot2::coord_flip() + 
+                    ggplot2::labs(title = "Feature Importance\n",
+                                  subtitle = "Ordenado Maior para Menor\n") +
+                    ggplot2::xlab(' ') +
+                    ggplot2::scale_y_continuous("Importancia (%)", expand = expansion(c(0, 0.1))) +
+                    ggplot2::geom_text(aes(label = paste0(Importancia, '%')),
+                                       hjust = - 0.3,
+                                       colour = '#25276F',
+                                       fontface = 'bold',
+                                       size = 5.0) +
+                    ggplot2::theme(panel.background = element_rect(fill = "white"),
+                                   panel.grid.major.y =  element_line(colour = "lightgrey"),
+                                   panel.grid.major.x =  element_line(colour = "lightgrey"),
+                                   plot.title = element_text(size = 18, face = "bold"),
+                                   plot.subtitle = element_text(size = 15.0),
+                                   panel.border = element_rect(colour = "black", fill = NA, size = 1),
+                                   axis.text.x = element_text(angle = 0, size = 15.0),
+                                   axis.text.y = element_text(size = 15.0),
+                                   axis.title.x = element_text(size = 15.0),
+                                   axis.title.y = element_text(size = 15.0))
+
+```
+\
+\
+*Comments*: Fica evidente como o modelo respeitou o esperado na análise exploratória. De fato, as variáveis mais relevantes são as variáveis topográficas de altura e ângulo de inclinação da encosta, enquando as demais variáveis pouco impactam na predição do alcance médio.
+\
+\
+    <p style="text-align: center;">**2 - Partial Dependence Plot**</p>
+```{r partDep, echo=TRUE, message=FALSE, warning=FALSE}
+
+### 2 - Partial Dependence
+      
+plot(DALEX::model_profile(explainer = DALEX::explain(model = regRF_model,  
+                                                     data = train_db %>% dplyr::select(!c(id, mean_range)),
+                                                     y = as.integer(train_db$mean_range), 
+                                                     type = "regression"),
+                          type = "partial"), 
+     geom = "points")
+
+```
+\
+\
+*Comments*: Vejamos como cada variável se comporta em relação ao target se as demais features permanecessem constantes. Nesse caso, os gráficos de dependência parcial (*PD*) podem nos mostrar a interpretação do algoritmo sobre como uma variável preditiva se comporta em relação ao target.
+\
+\
+Os resultados obtidos também seguem o que foi visualizado na etapa de análise exploratória.
+\
+\
+    <p style="text-align: center;">**3 - Métricas Estatísticas**</p>
+```{r metrics, echo=TRUE, message=FALSE, warning=FALSE}
+
+### 3) Metricas Estatisticas
+          
+          ### 1 - MAE
+          
+                  #### Validacao
+                  
+                  mae_Train <- MLmetrics::MAE(y_pred = unlist(evalRF_df %>% dplyr::filter(dataset == 'train') %>% 
+                                                                dplyr::select(pred_train)), 
+                                              y_true = unlist(evalRF_df %>% dplyr::filter(dataset == 'train') %>% 
+                                                                dplyr::select(mean_range)))
+          
+                  #### Validacao
+                  
+                  mae_Valid <- MLmetrics::MAE(y_pred = unlist(evalRF_df %>% dplyr::filter(dataset == 'valid') %>% 
+                                                                dplyr::select(pred_valid)), 
+                                              y_true = unlist(evalRF_df %>% dplyr::filter(dataset == 'valid') %>% 
+                                                                dplyr::select(mean_range)))
+                  
+          ### 2 - MAPE
+                  
+                  #### Validacao
+                  
+                  mape_Train <- MLmetrics::MAPE(y_pred = unlist(evalRF_df %>% dplyr::filter(dataset == 'train') %>% 
+                                                                  dplyr::select(pred_train)), 
+                                                y_true = unlist(evalRF_df %>% dplyr::filter(dataset == 'train') %>% 
+                                                                  dplyr::select(mean_range)))
+                  
+                  #### Validacao
+                  
+                  mape_Valid <- MLmetrics::MAPE(y_pred = unlist(evalRF_df %>% dplyr::filter(dataset == 'valid') %>% 
+                                                                 dplyr::select(pred_valid)), 
+                                               y_true = unlist(evalRF_df %>% dplyr::filter(dataset == 'valid') %>% 
+                                                                 dplyr::select(mean_range)))
+                  
+          ### 3 - MedianAE
+                  
+                  #### Validacao
+                  
+                  medae_Train <- MLmetrics::MedianAE(y_pred = unlist(evalRF_df %>% 
+                                                                       dplyr::filter(dataset == 'train') %>% 
+                                                                       dplyr::select(pred_train)), 
+                                                     y_true = unlist(evalRF_df %>% 
+                                                                       dplyr::filter(dataset == 'train') %>% 
+                                                                       dplyr::select(mean_range)))
+                  
+                  #### Validacao
+                  
+                  medae_Valid <- MLmetrics::MedianAE(y_pred = unlist(evalRF_df %>% 
+                                                                       dplyr::filter(dataset == 'valid') %>% 
+                                                                       dplyr::select(pred_valid)), 
+                                                     y_true = unlist(evalRF_df %>% 
+                                                                       dplyr::filter(dataset == 'valid') %>% 
+                                                                       dplyr::select(mean_range)))
+                  
+          ### 4 - KS_Stat
+                  
+                  #### Treino
+                  
+                  ks_Train <- stats::ks.test(x = unlist(evalRF_df %>% dplyr::filter(dataset == 'train') %>% 
+                                                          dplyr::select(pred_train)), 
+                                             y = unlist(evalRF_df %>% dplyr::filter(dataset == 'train') %>% 
+                                                          dplyr::select(mean_range)),
+                                             alternative = "two.sided")
+                  
+                  ks_Train <- as.numeric(ks_Train[[1]])
+                  
+                  #### Validacao
+                  
+                  ks_Valid <- stats::ks.test(x = unlist(evalRF_df %>% dplyr::filter(dataset == 'valid') %>% 
+                                                          dplyr::select(pred_valid)), 
+                                             y = unlist(evalRF_df %>% dplyr::filter(dataset == 'valid') %>% 
+                                                          dplyr::select(mean_range)),
+                                             alternative = "two.sided")
+                  
+                  ks_Valid <- as.numeric(ks_Valid[[1]])
+                  
+          ### Juntando tudo em um mesmo df
+                  
+                  mlmetrics_df <- bind_cols(mae_Train, mae_Valid, mape_Train, mape_Valid,
+                                            medae_Train, medae_Valid, ks_Train, ks_Valid) %>%
+                    dplyr::mutate(model = 'RandomForest') %>%
+                    dplyr::select(model, 
+                                  mae_Train = "...1", mae_Valid = "...2", mape_Train = "...3", mape_Valid = "...4",
+                                  medae_Train = "...5", medae_Valid = "...6", ks_Train = "...7", ks_Valid = "...8")
+                  
+# Printando resultados
+                  
+print(mlmetrics_df)
+
+```
+\
+\
+*Comments*: Por fim, verificamos algumas métricas para avaliação. É possível perceber como nosso modelo performou pouco pior em relação ao treino (algo esperado). O spread dos resultados obtidos é aceitável dado o problema proposto, assim como os valores obtidos estão em linha para a previsão do alcance.
+\
+\
+Dessa forma, as Defesas Civís de municípios poderiam utilizar desse modelo para simular as condições das encostas em situação de queda de blocos e adotar medidas preventivas capazes de mitigar os eventuais danos causados caso nada seja feito.
+\
