@@ -1,0 +1,13 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*.code-workspace
+lib
+lib64
+include
+pyvenv.cfg
+bin
+share
+.env
+__pycache__
